@@ -14,6 +14,16 @@ DB_NAME = "banco_ibama.db"
 
 st.set_page_config(page_title="IBAMA - Treino de Elite", page_icon="🌲", layout="wide")
 
+# Lista de fallback das IAs (tenta na ordem e pula se estourar cota)
+MODELOS_GEMINI = [
+    "gemini-flash-latest",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite"
+]
+
 # ==============================================================================
 # 🔒 CONTROLE DE ACESSO E PERFIS(Perfis para não acabar do dados)
 # ==============================================================================
@@ -40,13 +50,13 @@ if modo_selecionado == "🔐 Ryan (Modo Edição)":
         st.sidebar.error("❌ Senha incorreta!")
 
 elif modo_selecionado == "🧪 Modo Visitante (Testar App)":
-    st.sidebar.info("💡 Você está no modo sandbox. Teste o que quiser, nenhum dado será salvo no banco!")
+    st.sidebar.info("💡 Você está no modo sandbox. Teste o que quiser, as estatísticas NÃO serão salvas no banco!")
 
 st.session_state.eh_admin = eh_admin
 st.session_state.modo_atual = modo_selecionado
 
 # ==============================================================================
-# 🗄️ BANCO DE DADOS (Conexão Centralizada com o SQLite)
+# 🗄️ BANCO DE DADOS (Conexão Centralizada com o Supabase)
 # ==============================================================================
 def conectar_banco():
     """Conecta ao banco PostgreSQL do Supabase"""
@@ -68,9 +78,9 @@ def conectar_banco():
 # 🤖 GEMINI (IA - Mapeamento Inteligente do Relato de Estudo)
 # ==============================================================================
 def identificar_topico_via_chat(texto_usuario):
-    """Usa a IA para mapear o texto livre do usuário para a Matéria/Tópico do Edital Mestre"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
+        st.error("❌ ERRO: Chave GEMINI_API_KEY não foi encontrada nas variáveis de ambiente/secrets.")
         return None, None
 
     conn = conectar_banco()
@@ -78,6 +88,10 @@ def identificar_topico_via_chat(texto_usuario):
     cursor.execute("SELECT materia, topico FROM editais")
     edital_completo = cursor.fetchall()
     conn.close()
+
+    if not edital_completo:
+        st.error("⚠️ A tabela 'editais' está VAZIA no Supabase! Rode 'python migrar_para_supabase.py' no terminal.")
+        return None, None
 
     edital_fmt = "\n".join([f"- Matéria: {m} | Tópico: {t}" for m, t in edital_completo])
 
@@ -97,25 +111,29 @@ def identificar_topico_via_chat(texto_usuario):
     """
 
     client = genai.Client(api_key=api_key)
-    modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
     
-    for mod in modelos:
+    for mod in MODELOS_GEMINI:
         try:
             res = client.models.generate_content(
                 model=mod, contents=prompt, config={"response_mime_type": "application/json"}
             )
             dados = json.loads(res.text)
-            return dados.get("materia"), dados.get("topico")
-        except Exception:
+            
+            materia = dados.get("materia") or dados.get("Materia") or dados.get("MATERIA")
+            topico = dados.get("topico") or dados.get("Topico") or dados.get("TOPICO")
+            
+            if materia and topico:
+                return materia, topico
+        except Exception as e:
+            print(f"⚠️ Erro ao tentar o modelo {mod}: {e}")
             continue
-    return None, None
 
+    return None, None
 
 # ==============================================================================
 # 🤖 GEMINI (IA - Geração Automática de Questões Inéditas Cebraspe)
 # ==============================================================================
 def gerar_questoes_ia(materia, topico, qtd_necessaria):
-    """Gera questões faltantes no formato Certo/Errado quando o lote precisa ser completado"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return
@@ -135,8 +153,8 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
       }}
     ]
     """
-    modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    for mod in modelos:
+    
+    for mod in MODELOS_GEMINI:
         try:
             res = client.models.generate_content(
                 model=mod, contents=prompt, config={"response_mime_type": "application/json"}
@@ -161,7 +179,6 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
 # ✍️ GEMINI (IA - Geração e Correção de Redação Discursiva Cebraspe)
 # ==============================================================================
 def gerar_tema_redacao_ia(materia, topico):
-    """Gera um tema de estudo de caso / discursiva no padrão Cebraspe (Max 30 linhas)"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return "Erro: Chave API não encontrada."
@@ -187,8 +204,8 @@ def gerar_tema_redacao_ia(materia, topico):
       "topico_3": "3. [Descrição do item 3] (10 pontos)"
     }}
     """
-    modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    for mod in modelos:
+    
+    for mod in MODELOS_GEMINI:
         try:
             res = client.models.generate_content(
                 model=mod, contents=prompt, config={"response_mime_type": "application/json"}
@@ -199,7 +216,6 @@ def gerar_tema_redacao_ia(materia, topico):
     return None
 
 def corrigir_redacao_ia(proposta_json, texto_aluno):
-    """Avalia o texto do aluno segundo os critérios oficiais de correção Cebraspe"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return "Erro: Chave API não encontrada."
@@ -233,8 +249,8 @@ def corrigir_redacao_ia(proposta_json, texto_aluno):
       "sugestão_melhoria": "Como o candidato poderia reescrever para gabaritar a nota máxima."
     }}
     """
-    modelos = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    for mod in modelos:
+    
+    for mod in MODELOS_GEMINI:
         try:
             res = client.models.generate_content(
                 model=mod, contents=prompt, config={"response_mime_type": "application/json"}
@@ -249,7 +265,6 @@ def corrigir_redacao_ia(proposta_json, texto_aluno):
 # 🔍 FILTRO & CÁLCULO (Busca Direta por Vínculo do Edital Mestre)
 # ==============================================================================
 def calcular_dominio_real_topico(topico):
-    """FILTRO DIRETO: Puxa a contagem do banco pela coluna vinculada topico_edital"""
     conn = conectar_banco()
     cursor = conn.cursor()
 
@@ -317,18 +332,25 @@ if opcao == "💬 Chat de Estudo Diário":
     )
 
     if st.button("🚀 Processar e Gerar 10 Exercícios"):
-        if not estudo_texto.strip():
+        if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+            st.error("⚠️ Você está no Modo Apenas Leitura. Mude para o Modo Visitante ou Edição para usar a IA.")
+        elif not estudo_texto.strip():
             st.warning("Por favor, digite o que você estudou antes de enviar!")
         else:
             with st.spinner("🤖 GEMINI analisando seu relato e buscando o tópico no Edital Mestre..."):
                 materia_id, topico_id = identificar_topico_via_chat(estudo_texto)
 
             if topico_id:
+                # TRAVA 1: SÓ ATUALIZA O "ESTUDADO NA SEMANA" SE TIVER A SENHA CORRETA
+                if st.session_state.eh_admin:
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (topico_id,))
+                    conn.commit()
+                    conn.close()
+                
                 conn = conectar_banco()
                 cursor = conn.cursor()
-                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (topico_id,))
-                conn.commit()
-                
                 cursor.execute("SELECT id FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (topico_id,))
                 q_existentes = cursor.fetchall()
                 conn.close()
@@ -370,27 +392,40 @@ if opcao == "💬 Chat de Estudo Diário":
             st.markdown("")
 
         if st.button("📌 Finalizar Treino e Registrar Desempenho"):
-            acertos = 0
-            conn = conectar_banco()
-            cursor = conn.cursor()
-            
-            for q_id, item, gabarito, explicacao in questoes:
-                resp = respostas_usuario.get(q_id)
-                acertou = 1 if resp == gabarito else 0
-                if acertou:
-                    acertos += 1
-                cursor.execute("""
-                    INSERT INTO respostas (questao_id, materia, topico, acertou)
-                    VALUES (%s, %s, %s, %s)
-                """, (q_id, info_t["materia"], info_t["topico"], acertou))
-            
-            cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico"],))
-            conn.commit()
-            conn.close()
+            # TRAVA 2: BLOQUEIO DE SALVAMENTO DE RESPOSTAS
+            if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+                st.error("⚠️ Você está no Modo Apenas Leitura. Suas respostas não foram avaliadas nem salvas.")
+            elif st.session_state.modo_atual == "🧪 Modo Visitante (Testar App)":
+                # Apenas calcula na RAM e mostra, sem salvar no Supabase
+                acertos = sum(1 for q_id, item, gabarito, explicacao in questoes if respostas_usuario.get(q_id) == gabarito)
+                st.balloons()
+                st.success(f"🧪 [Modo Visitante] Treino Finalizado! Você acertou **{acertos}/10** ({acertos * 10}%).")
+                st.info("💡 Suas estatísticas foram validadas apenas na memória e NÃO sujaram o banco de dados oficial.")
+            elif not st.session_state.eh_admin:
+                st.error("🔒 Digite a senha na barra lateral para salvar seu progresso no banco de dados.")
+            else:
+                # MODO ADMIN REAL (COM SENHA VALIDADA)
+                acertos = 0
+                conn = conectar_banco()
+                cursor = conn.cursor()
+                
+                for q_id, item, gabarito, explicacao in questoes:
+                    resp = respostas_usuario.get(q_id)
+                    acertou = 1 if resp == gabarito else 0
+                    if acertou:
+                        acertos += 1
+                    cursor.execute("""
+                        INSERT INTO respostas (questao_id, materia, topico, acertou)
+                        VALUES (%s, %s, %s, %s)
+                    """, (q_id, info_t["materia"], info_t["topico"], acertou))
+                
+                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico"],))
+                conn.commit()
+                conn.close()
 
-            st.balloons()
-            st.success(f"Treino Concluído! Você acertou **{acertos}/10** ({acertos * 10}%).")
-            st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
+                st.balloons()
+                st.success(f"Treino Concluído! Você acertou **{acertos}/10** ({acertos * 10}%).")
+                st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
 
 
 # ==============================================================================
@@ -418,32 +453,39 @@ elif opcao == "📅 Simulado da Semana":
 
         with c_sim1:
             if st.button("🚀 Gerar e Resolver Simulado Agora"):
-                topicos_nomes = [t[1] for t in topicos_semana]
-                placeholders = ",".join(["?"] * len(topicos_nomes))
-                
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute(f"""
-                    SELECT id, materia, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito
-                    FROM questoes
-                    WHERE topico_edital IN ({placeholders}) AND status_escopo != 'Fora do Escopo'
-                    ORDER BY RANDOM()
-                    LIMIT 20
-                """, topicos_nomes)
-                st.session_state["questoes_simulado_semanal"] = cursor.fetchall()
-                conn.close()
+                if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+                    st.error("⚠️ Você está no Modo Apenas Leitura. Mude o perfil para fazer o simulado.")
+                else:
+                    topicos_nomes = [t[1] for t in topicos_semana]
+                    placeholders = ",".join(["%s"] * len(topicos_nomes)) 
+                    
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    cursor.execute(f"""
+                        SELECT id, materia, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito
+                        FROM questoes
+                        WHERE topico_edital IN ({placeholders}) AND status_escopo != 'Fora do Escopo'
+                        ORDER BY RANDOM()
+                        LIMIT 20
+                    """, topicos_nomes)
+                    st.session_state["questoes_simulado_semanal"] = cursor.fetchall()
+                    conn.close()
 
         with c_sim2:
             if st.button("🔄 Reiniciar Ciclo Semanal (Limpar Fila)"):
-                conn = conectar_banco()
-                cursor = conn.cursor()
-                cursor.execute("UPDATE editais SET estudado_na_semana = 0")
-                conn.commit()
-                conn.close()
-                if "questoes_simulado_semanal" in st.session_state:
-                    del st.session_state["questoes_simulado_semanal"]
-                st.success("Ciclo Semanal reiniciado!")
-                st.rerun()
+                # TRAVA 3: BLOQUEIO DE REINÍCIO DO CICLO
+                if not st.session_state.eh_admin:
+                    st.error("⚠️ Apenas o Ryan (Modo Edição) com a senha correta tem permissão para reiniciar o ciclo.")
+                else:
+                    conn = conectar_banco()
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE editais SET estudado_na_semana = 0")
+                    conn.commit()
+                    conn.close()
+                    if "questoes_simulado_semanal" in st.session_state:
+                        del st.session_state["questoes_simulado_semanal"]
+                    st.success("Ciclo Semanal reiniciado!")
+                    st.rerun()
 
     # EXECUÇÃO DO SIMULADO GERADO
     if "questoes_simulado_semanal" in st.session_state:
@@ -459,27 +501,40 @@ elif opcao == "📅 Simulado da Semana":
             st.markdown("")
 
         if st.button("📌 Finalizar Simulado Semanal"):
-            acertos = 0
-            conn = conectar_banco()
-            cursor = conn.cursor()
+            # TRAVA 4: BLOQUEIO DE SALVAMENTO DO SIMULADO
+            if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+                st.error("⚠️ Você está no Modo Apenas Leitura. O simulado não foi contabilizado.")
+            elif st.session_state.modo_atual == "🧪 Modo Visitante (Testar App)":
+                # Avalia apenas na memória RAM para o visitante
+                acertos = sum(1 for q in questoes_sim if respostas_simulados.get(q[0]) == q[4])
+                taxa = round((acertos / len(questoes_sim)) * 100, 1) if questoes_sim else 0
+                st.balloons()
+                st.success(f"🧪 [Modo Visitante] Simulado Concluído! Você acertou **{acertos} de {len(questoes_sim)}** ({taxa}%). Nada foi salvo no banco.")
+            elif not st.session_state.eh_admin:
+                st.error("🔒 Digite a senha na barra lateral para salvar o simulado no banco de dados.")
+            else:
+                # MODO ADMIN REAL (COM SENHA VALIDADA)
+                acertos = 0
+                conn = conectar_banco()
+                cursor = conn.cursor()
 
-            for q in questoes_sim:
-                q_id, mat, top, item, gab, expl = q
-                resp = respostas_simulados.get(q_id)
-                acertou = 1 if resp == gab else 0
-                if acertou:
-                    acertos += 1
-                cursor.execute("""
-                    INSERT INTO respostas (questao_id, materia, topico, acertou)
-                    VALUES (%s, %s, %s, %s)
-                """, (q_id, mat, top, acertou))
+                for q in questoes_sim:
+                    q_id, mat, top, item, gab, expl = q
+                    resp = respostas_simulados.get(q_id)
+                    acertou = 1 if resp == gab else 0
+                    if acertou:
+                        acertos += 1
+                    cursor.execute("""
+                        INSERT INTO respostas (questao_id, materia, topico, acertou)
+                        VALUES (%s, %s, %s, %s)
+                    """, (q_id, mat, top, acertou))
 
-            conn.commit()
-            conn.close()
+                conn.commit()
+                conn.close()
 
-            taxa = round((acertos / len(questoes_sim)) * 100, 1)
-            st.balloons()
-            st.success(f"Simulado Concluído! Você acertou **{acertos} de {len(questoes_sim)}** ({taxa}% de aproveitamento).")
+                taxa = round((acertos / len(questoes_sim)) * 100, 1)
+                st.balloons()
+                st.success(f"Simulado Concluído! Você acertou **{acertos} de {len(questoes_sim)}** ({taxa}% de aproveitamento).")
 
 
 # ==============================================================================
@@ -505,10 +560,13 @@ elif opcao == "✍️ Oficina de Redação Discursiva":
     conn.close()
 
     if st.button("🎯 Gerar Proposta de Redação Inédita"):
-        with st.spinner("🤖 GEMINI elaborando estudo de caso e espelho de avaliação..."):
-            proposta = gerar_tema_redacao_ia(mat_sel, top_sel)
-            if proposta:
-                st.session_state["proposta_redacao_atual"] = proposta
+        if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+            st.error("⚠️ Você está no Modo Apenas Leitura. Mude o perfil para gerar redações via IA.")
+        else:
+            with st.spinner("🤖 GEMINI elaborando estudo de caso e espelho de avaliação..."):
+                proposta = gerar_tema_redacao_ia(mat_sel, top_sel)
+                if proposta:
+                    st.session_state["proposta_redacao_atual"] = proposta
 
     # EXIBIÇÃO DA PROPOSTA E ÁREA DE TEXTO
     if "proposta_redacao_atual" in st.session_state:
@@ -529,7 +587,9 @@ elif opcao == "✍️ Oficina de Redação Discursiva":
         texto_redacao = st.text_area("Digite ou cole seu texto aqui:", height=250, placeholder="Em relação ao tema proposto, cabe destacar que...")
 
         if st.button("📊 Enviar Redação para Correção pelo Cebraspe IA"):
-            if len(texto_redacao.strip()) < 50:
+            if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
+                 st.error("⚠️ Você está no Modo Apenas Leitura. Mude o perfil para acessar o corretor IA.")
+            elif len(texto_redacao.strip()) < 50:
                 st.warning("Escreva um texto um pouco mais completo antes de enviar para correção!")
             else:
                 with st.spinner("🤖 Examinador Cebraspe corrigindo conteúdo, estrutura e desvios gramaticais..."):
