@@ -356,13 +356,22 @@ if opcao == "💬 Chat de Estudo Diário":
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (topico_id,))
                 q_existentes = cursor.fetchall()
-                conn.close()
-
+                
                 qtd_atual = len(q_existentes)
-                # Garante que o banco tenha pelo menos o lote inicial de 10
                 if qtd_atual < 10:
                     with st.spinner(f"🤖 GEMINI gerando {10 - qtd_atual} questões para abrir o lote..."):
                         gerar_questoes_ia(materia_id, topico_id, 10 - qtd_atual)
+
+                # 🔒 TRAVANDO O SORTEIO NA MEMÓRIA AQUI:
+                cursor.execute("""
+                    SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
+                    FROM questoes 
+                    WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
+                    ORDER BY RANDOM()
+                    LIMIT 10
+                """, (topico_id,))
+                st.session_state["questoes_treino_atual"] = cursor.fetchall()
+                conn.close()
 
                 st.session_state["treino_atual"] = {
                     "materia": materia_id,
@@ -372,11 +381,13 @@ if opcao == "💬 Chat de Estudo Diário":
             else:
                 st.error("Não foi possível associar seu texto a um tópico do edital. Tente ser mais específico!")
 
-    if "treino_atual" in st.session_state:
+    # Exibe o treino baseado EXCLUSIVAMENTE na memória salva
+    if "treino_atual" in st.session_state and "questoes_treino_atual" in st.session_state:
         info_t = st.session_state["treino_atual"]
+        questoes = st.session_state["questoes_treino_atual"]
+        
         st.markdown("---")
         
-        # Conta total de questões daquele tópico no banco
         conn = conectar_banco()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (info_t["topico"],))
@@ -386,24 +397,26 @@ if opcao == "💬 Chat de Estudo Diário":
         c_tit.subheader(f"📝 Treino: {info_t['topico']}")
         c_tit.caption(f"O seu banco de dados tem **{total_no_banco}** questões sobre este assunto. O app sorteou 10 para você.")
         
-        # Botão mágico para expandir o banco (Apenas Ryan pode ver/usar)
         if st.session_state.eh_admin:
             if c_btn.button("✨ Gerar +5 Questões Inéditas com IA"):
                 with st.spinner("Fabricando mais 5 questões inéditas para engordar seu banco..."):
                     gerar_questoes_ia(info_t["materia"], info_t["topico"], 5)
-                    st.success("Questões adicionadas! Reinicie o treino para elas aparecerem.")
+                    
+                    # Refaz o sorteio e salva na memória incluindo as novas
+                    cursor.execute("""
+                        SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
+                        FROM questoes 
+                        WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
+                        ORDER BY RANDOM()
+                        LIMIT 10
+                    """, (info_t["topico"],))
+                    st.session_state["questoes_treino_atual"] = cursor.fetchall()
+                    conn.close()
+                    
+                    st.success("Questões adicionadas! O lote atual foi re-sorteado.")
                     st.rerun()
-
-        # EMBARALHA AS QUESTÕES (Sorteio aleatório a cada vez que treina)
-        cursor.execute("""
-            SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
-            FROM questoes 
-            WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
-            ORDER BY RANDOM()
-            LIMIT 10
-        """, (info_t["topico"],))
-        questoes = cursor.fetchall()
-        conn.close()
+        else:
+            conn.close()
 
         respostas_usuario = {}
         for idx, q in enumerate(questoes, 1):
@@ -419,6 +432,7 @@ if opcao == "💬 Chat de Estudo Diário":
                 acertos = sum(1 for q_id, item, gabarito, explicacao in questoes if respostas_usuario.get(q_id) == gabarito)
                 st.balloons()
                 st.success(f"🧪 [Modo Visitante] Treino Finalizado! Você acertou **{acertos}/10** ({acertos * 10}%).")
+                st.info("💡 Suas estatísticas foram validadas apenas na memória e NÃO sujaram o banco de dados oficial.")
             elif not st.session_state.eh_admin:
                 st.error("🔒 Digite a senha na barra lateral para salvar seu progresso no banco de dados.")
             else:
@@ -443,7 +457,7 @@ if opcao == "💬 Chat de Estudo Diário":
                 st.balloons()
                 st.success(f"Treino Concluído! Você acertou **{acertos}/10** ({acertos * 10}%).")
                 st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
-
+                
 # ==============================================================================
 # 💻 INTERFACE 2: SIMULADO DA SEMANA (Acesso Permanente)
 # ==============================================================================
