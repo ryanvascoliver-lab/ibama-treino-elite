@@ -14,6 +14,36 @@ DB_NAME = "banco_ibama.db"
 
 st.set_page_config(page_title="IBAMA - Treino de Elite", page_icon="🌲", layout="wide")
 
+# ==============================================================================
+# 🔒 CONTROLE DE ACESSO E PERFIS(Perfis para não acabar do dados)
+# ==============================================================================
+SENHA_RYAN = os.getenv("SENHA_ADMIN", "0000")  # Define a senha no .env ou usa "1234" por padrão
+
+if "usuario_modo" not in st.session_state:
+    st.session_state.usuario_modo = "Ryan (Apenas Leitura)"
+
+st.sidebar.title("👤 Perfil de Acesso")
+modo_selecionado = st.sidebar.radio(
+    "Como deseja navegar?",
+    ["📊 Ryan (Apenas Leitura)", "🔐 Ryan (Modo Edição)", "🧪 Modo Visitante (Testar App)"]
+)
+
+# Lógica de controle de permissões
+eh_admin = False
+
+if modo_selecionado == "🔐 Ryan (Modo Edição)":
+    senha = st.sidebar.text_input("Digite a senha do Ryan:", type="password")
+    if senha == SENHA_RYAN:
+        st.sidebar.success("🔓 Acesso liberado! Suas alterações serão salvas no Supabase.")
+        eh_admin = True
+    elif senha:
+        st.sidebar.error("❌ Senha incorreta!")
+
+elif modo_selecionado == "🧪 Modo Visitante (Testar App)":
+    st.sidebar.info("💡 Você está no modo sandbox. Teste o que quiser, nenhum dado será salvo no banco!")
+
+st.session_state.eh_admin = eh_admin
+st.session_state.modo_atual = modo_selecionado
 
 # ==============================================================================
 # 🗄️ BANCO DE DADOS (Conexão Centralizada com o SQLite)
@@ -118,7 +148,7 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
             for q in questoes_novas:
                 cursor.execute("""
                     INSERT INTO questoes (materia, topico, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito, status_escopo)
-                    VALUES (?, ?, ?, ?, ?, ?, 'Tema 2 - Fiscalizacao')
+                    VALUES (%s, %s, %s, %s, %s, %s, 'Tema 2 - Fiscalizacao')
                 """, (materia, topico, topico, q["item_inedito"], q["gabarito_oficial"], q["explicacao_gabarito"]))
             conn.commit()
             conn.close()
@@ -225,7 +255,7 @@ def calcular_dominio_real_topico(topico):
 
     cursor.execute("""
         SELECT COUNT(*) FROM questoes 
-        WHERE topico_edital = ? AND status_escopo != 'Fora do Escopo'
+        WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
     """, (topico,))
     total_banco = cursor.fetchone()[0] or 0
 
@@ -236,7 +266,7 @@ def calcular_dominio_real_topico(topico):
                 COUNT(DISTINCT CASE WHEN acertou = 1 THEN questao_id END) as acertos_unicos,
                 COUNT(CASE WHEN acertou = 0 THEN 1 END) as total_erros
             FROM respostas 
-            WHERE topico = ? OR topico_edital = ?
+            WHERE topico = %s OR topico_edital = %s
         """, (topico, topico))
         row_resp = cursor.fetchone()
         resolvidas_unicas = row_resp[0] if row_resp else 0
@@ -296,10 +326,10 @@ if opcao == "💬 Chat de Estudo Diário":
             if topico_id:
                 conn = conectar_banco()
                 cursor = conn.cursor()
-                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = ?", (topico_id,))
+                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (topico_id,))
                 conn.commit()
                 
-                cursor.execute("SELECT id FROM questoes WHERE topico_edital = ? AND status_escopo != 'Fora do Escopo'", (topico_id,))
+                cursor.execute("SELECT id FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (topico_id,))
                 q_existentes = cursor.fetchall()
                 conn.close()
 
@@ -326,7 +356,7 @@ if opcao == "💬 Chat de Estudo Diário":
         cursor.execute("""
             SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
             FROM questoes 
-            WHERE topico_edital = ? AND status_escopo != 'Fora do Escopo'
+            WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
             LIMIT 10
         """, (info_t["topico"],))
         questoes = cursor.fetchall()
@@ -351,10 +381,10 @@ if opcao == "💬 Chat de Estudo Diário":
                     acertos += 1
                 cursor.execute("""
                     INSERT INTO respostas (questao_id, materia, topico, acertou)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 """, (q_id, info_t["materia"], info_t["topico"], acertou))
             
-            cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = ?", (info_t["topico"],))
+            cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico"],))
             conn.commit()
             conn.close()
 
@@ -441,7 +471,7 @@ elif opcao == "📅 Simulado da Semana":
                     acertos += 1
                 cursor.execute("""
                     INSERT INTO respostas (questao_id, materia, topico, acertou)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 """, (q_id, mat, top, acertou))
 
             conn.commit()
@@ -468,7 +498,7 @@ elif opcao == "✍️ Oficina de Redação Discursiva":
     with col_m1:
         mat_sel = st.selectbox("Selecione a Matéria do Tema:", materias_red)
     with col_m2:
-        cursor.execute("SELECT topico FROM editais WHERE materia = ?", (mat_sel,))
+        cursor.execute("SELECT topico FROM editais WHERE materia = %s", (mat_sel,))
         topicos_red = [t[0] for t in cursor.fetchall()]
         top_sel = st.selectbox("Selecione o Tópico Específico:", topicos_red)
 
@@ -539,7 +569,7 @@ elif opcao == "📊 Porcentagem de Domínio":
     materias = [m[0] for m in cursor.fetchall()]
 
     for mat in materias:
-        cursor.execute("SELECT topico FROM editais WHERE materia = ?", (mat,))
+        cursor.execute("SELECT topico FROM editais WHERE materia = %s", (mat,))
         topicos = [t[0] for t in cursor.fetchall()]
         
         dados_topicos = [calcular_dominio_real_topico(t) for t in topicos]
