@@ -134,7 +134,7 @@ def identificar_topico_via_chat(texto_usuario):
 
     return None, None
 
-# ==============================================================================
+# # ==============================================================================
 # 🤖 GEMINI (IA - Geração Automática de Questões Inéditas Cebraspe)
 # ==============================================================================
 def gerar_questoes_ia(materia, topico, qtd_necessaria):
@@ -147,6 +147,11 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
     Gere exatamente {qtd_necessaria} questões inéditas no formato CERTO ou ERRADO (estilo Cebraspe).
     Matéria: {materia}
     Tópico: {topico}
+
+    REGRAS DE OURO PARA A GERAÇÃO:
+    1. INDEPENDÊNCIA: As questões DEVEM ser auto-suficientes. NUNCA faça referência a "no texto", "no segundo parágrafo" ou "o autor do texto", pois não há texto base de apoio.
+    2. FOCO TEÓRICO: Se o tópico for de Português (ex: Tipologia Textual), cobre a TEORIA (características do texto narrativo, dissertativo, injuntivo, etc.) ou insira uma frase curta (1 linha) DENTRO do próprio item para ser analisada.
+    3. RIGOR CEBRASPE: Cobre conceitos diretos, pegadinhas doutrinárias, exceções à regra ou aplicação prática direta.
 
     Retorne APENAS um JSON estrito no formato:
     [
