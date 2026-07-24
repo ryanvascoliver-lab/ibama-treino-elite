@@ -3,7 +3,7 @@
 # ==============================================================================
 import os
 import json
-import sqlite3
+import psycopg2
 import random
 import streamlit as st
 from dotenv import load_dotenv
@@ -19,8 +19,19 @@ st.set_page_config(page_title="IBAMA - Treino de Elite", page_icon="🌲", layou
 # 🗄️ BANCO DE DADOS (Conexão Centralizada com o SQLite)
 # ==============================================================================
 def conectar_banco():
-    """Abre e retorna a conexão com o banco local"""
-    return sqlite3.connect(DB_NAME)
+    """Conecta ao banco PostgreSQL do Supabase"""
+    db_url = os.getenv("SUPABASE_DB_URL")
+    if not db_url:
+        try:
+            db_url = st.secrets["SUPABASE_DB_URL"]
+        except Exception:
+            pass
+            
+    if not db_url:
+        st.error("Erro: SUPABASE_DB_URL não configurada.")
+        return None
+        
+    return psycopg2.connect(db_url)
 
 
 # ==============================================================================
