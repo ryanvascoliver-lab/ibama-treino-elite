@@ -331,7 +331,7 @@ if opcao == "💬 Chat de Estudo Diário":
         placeholder="Ex: Hoje estudei crimes contra a fauna e processo sancionador ambiental..."
     )
 
-    if st.button("🚀 Processar e Gerar 10 Exercícios"):
+    if st.button("🚀 Processar e Gerar Treino"):
         if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
             st.error("⚠️ Você está no Modo Apenas Leitura. Mude para o Modo Visitante ou Edição para usar a IA.")
         elif not estudo_texto.strip():
@@ -341,7 +341,6 @@ if opcao == "💬 Chat de Estudo Diário":
                 materia_id, topico_id = identificar_topico_via_chat(estudo_texto)
 
             if topico_id:
-                # TRAVA 1: SÓ ATUALIZA O "ESTUDADO NA SEMANA" SE TIVER A SENHA CORRETA
                 if st.session_state.eh_admin:
                     conn = conectar_banco()
                     cursor = conn.cursor()
@@ -356,8 +355,9 @@ if opcao == "💬 Chat de Estudo Diário":
                 conn.close()
 
                 qtd_atual = len(q_existentes)
+                # Garante que o banco tenha pelo menos o lote inicial de 10
                 if qtd_atual < 10:
-                    with st.spinner(f"🤖 GEMINI gerando {10 - qtd_atual} questões inéditas para fechar o lote..."):
+                    with st.spinner(f"🤖 GEMINI gerando {10 - qtd_atual} questões para abrir o lote..."):
                         gerar_questoes_ia(materia_id, topico_id, 10 - qtd_atual)
 
                 st.session_state["treino_atual"] = {
@@ -371,14 +371,31 @@ if opcao == "💬 Chat de Estudo Diário":
     if "treino_atual" in st.session_state:
         info_t = st.session_state["treino_atual"]
         st.markdown("---")
-        st.subheader(f"📝 10 Exercícios do Tópico: {info_t['topico']}")
-
+        
+        # Conta total de questões daquele tópico no banco
         conn = conectar_banco()
         cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (info_t["topico"],))
+        total_no_banco = cursor.fetchone()[0]
+        
+        c_tit, c_btn = st.columns([2, 1])
+        c_tit.subheader(f"📝 Treino: {info_t['topico']}")
+        c_tit.caption(f"O seu banco de dados tem **{total_no_banco}** questões sobre este assunto. O app sorteou 10 para você.")
+        
+        # Botão mágico para expandir o banco (Apenas Ryan pode ver/usar)
+        if st.session_state.eh_admin:
+            if c_btn.button("✨ Gerar +5 Questões Inéditas com IA"):
+                with st.spinner("Fabricando mais 5 questões inéditas para engordar seu banco..."):
+                    gerar_questoes_ia(info_t["materia"], info_t["topico"], 5)
+                    st.success("Questões adicionadas! Reinicie o treino para elas aparecerem.")
+                    st.rerun()
+
+        # EMBARALHA AS QUESTÕES (Sorteio aleatório a cada vez que treina)
         cursor.execute("""
             SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
             FROM questoes 
             WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
+            ORDER BY RANDOM()
             LIMIT 10
         """, (info_t["topico"],))
         questoes = cursor.fetchall()
@@ -392,19 +409,15 @@ if opcao == "💬 Chat de Estudo Diário":
             st.markdown("")
 
         if st.button("📌 Finalizar Treino e Registrar Desempenho"):
-            # TRAVA 2: BLOQUEIO DE SALVAMENTO DE RESPOSTAS
             if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
                 st.error("⚠️ Você está no Modo Apenas Leitura. Suas respostas não foram avaliadas nem salvas.")
             elif st.session_state.modo_atual == "🧪 Modo Visitante (Testar App)":
-                # Apenas calcula na RAM e mostra, sem salvar no Supabase
                 acertos = sum(1 for q_id, item, gabarito, explicacao in questoes if respostas_usuario.get(q_id) == gabarito)
                 st.balloons()
                 st.success(f"🧪 [Modo Visitante] Treino Finalizado! Você acertou **{acertos}/10** ({acertos * 10}%).")
-                st.info("💡 Suas estatísticas foram validadas apenas na memória e NÃO sujaram o banco de dados oficial.")
             elif not st.session_state.eh_admin:
                 st.error("🔒 Digite a senha na barra lateral para salvar seu progresso no banco de dados.")
             else:
-                # MODO ADMIN REAL (COM SENHA VALIDADA)
                 acertos = 0
                 conn = conectar_banco()
                 cursor = conn.cursor()
@@ -426,7 +439,6 @@ if opcao == "💬 Chat de Estudo Diário":
                 st.balloons()
                 st.success(f"Treino Concluído! Você acertou **{acertos}/10** ({acertos * 10}%).")
                 st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
-
 
 # ==============================================================================
 # 💻 INTERFACE 2: SIMULADO DA SEMANA (Acesso Permanente)
