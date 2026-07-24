@@ -102,7 +102,11 @@ def identificar_topico_via_chat(texto_usuario):
     Abaixo está a lista oficial de matérias e tópicos do Edital Mestre:
     {edital_fmt}
 
-    Sua tarefa é identificar a MATÉRIA e o TÓPICO do edital que melhor correspondem ao que o estudante descreveu.
+    REGRA DE OURO: Dê prioridade ABSOLUTA para a correspondência exata de palavras. 
+    Se o estudante citou termos específicos (ex: "Tipologia", "Fauna", "Licenciamento"), busque o tópico que contém EXATAMENTE essas palavras. 
+    NÃO generalize o assunto (ex: não jogue para "Interpretação de textos" se houver um tópico específico sobre "Tipologia").
+
+    Sua tarefa é identificar a MATÉRIA e o TÓPICO da lista acima que melhor correspondem ao relato.
     Retorne APENAS um JSON estrito no seguinte formato:
     {{
       "materia": "Nome exato da matéria da lista",
