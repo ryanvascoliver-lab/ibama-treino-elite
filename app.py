@@ -80,18 +80,14 @@ def conectar_banco():
 def identificar_topico_via_chat(texto_usuario):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        st.error("❌ ERRO: Chave GEMINI_API_KEY não foi encontrada nas variáveis de ambiente/secrets.")
-        return None, None
+        st.error("❌ ERRO: Chave GEMINI_API_KEY não encontrada.")
+        return None, None, None
 
     conn = conectar_banco()
     cursor = conn.cursor()
     cursor.execute("SELECT materia, topico FROM editais")
     edital_completo = cursor.fetchall()
     conn.close()
-
-    if not edital_completo:
-        st.error("⚠️ A tabela 'editais' está VAZIA no Supabase! Rode 'python migrar_para_supabase.py' no terminal.")
-        return None, None
 
     edital_fmt = "\n".join([f"- Matéria: {m} | Tópico: {t}" for m, t in edital_completo])
 
@@ -102,16 +98,16 @@ def identificar_topico_via_chat(texto_usuario):
     Abaixo está a lista oficial de matérias e tópicos do Edital Mestre:
     {edital_fmt}
 
-    REGRA DE OURO ESTRITA (LEIA COM ATENÇÃO):
-    1. Dê prioridade ABSOLUTA para a correspondência exata de palavras. 
-    2. Se o estudante citou termos como "Tipologia Textual", "Tipologia", "Dissertativo" ou "Narrativo", você DEVE mapear para o tópico exato de "Tipologia Textual" da lista.
-    3. NUNCA generalize para "Compreensão e interpretação de textos" a menos que o estudante tenha falado explicitamente de interpretação e compreensão.
+    Sua tarefa é identificar a HIERARQUIA do estudo. Você deve:
+    1. Encontrar a MATÉRIA oficial na lista.
+    2. Encontrar o TÓPICO OFICIAL na lista que engloba o que ele estudou (mesmo que seja amplo).
+    3. Definir um FOCO ESPECÍFICO (máximo 5 palavras) resumindo o tema exato que ele estudou, para não generalizar.
 
-    Sua tarefa é identificar a MATÉRIA e o TÓPICO do edital que melhor correspondem ao que o estudante descreveu.
-    Retorne APENAS um JSON estrito no seguinte formato:
+    Retorne APENAS um JSON estrito no formato:
     {{
       "materia": "Nome exato da matéria da lista",
-      "topico": "Nome exato do tópico da lista"
+      "topico_oficial": "Nome do tópico amplo da lista",
+      "foco_especifico": "O assunto exato e específico (ex: Tipologia Textual, Crimes Ambientais, Atos Administrativos)"
     }}
     """
 
@@ -124,21 +120,21 @@ def identificar_topico_via_chat(texto_usuario):
             )
             dados = json.loads(res.text)
             
-            materia = dados.get("materia") or dados.get("Materia") or dados.get("MATERIA")
-            topico = dados.get("topico") or dados.get("Topico") or dados.get("TOPICO")
+            mat = dados.get("materia")
+            top_oficial = dados.get("topico_oficial")
+            foco = dados.get("foco_especifico")
             
-            if materia and topico:
-                return str(materia).strip(), str(topico).strip()
-        except Exception as e:
-            print(f"⚠️ Erro ao tentar o modelo {mod}: {e}")
+            if mat and top_oficial and foco:
+                return str(mat).strip(), str(top_oficial).strip(), str(foco).strip()
+        except Exception:
             continue
 
-    return None, None
+    return None, None, None
 
 # ==============================================================================
 # 🤖 GEMINI (IA - Geração Automática de Questões Inéditas Cebraspe)
 # ==============================================================================
-def gerar_questoes_ia(materia, topico, qtd_necessaria):
+def gerar_questoes_ia(materia, topico_oficial, foco_especifico, qtd_necessaria):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return
@@ -147,12 +143,13 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
     prompt = f"""
     Gere exatamente {qtd_necessaria} questões inéditas no formato CERTO ou ERRADO (estilo Cebraspe).
     Matéria: {materia}
-    Tópico: {topico}
+    Tópico do Edital (Macro): {topico_oficial}
+    Foco Específico (Micro - MIRA LASER): {foco_especifico}
 
     REGRAS DE OURO PARA A GERAÇÃO:
-    1. INDEPENDÊNCIA: As questões DEVEM ser auto-suficientes. NUNCA faça referência a "no texto", "no segundo parágrafo" ou "o autor do texto", pois não há texto base de apoio.
-    2. FOCO TEÓRICO: Se o tópico for de Português (ex: Tipologia Textual), cobre a TEORIA (características do texto narrativo, dissertativo, injuntivo, etc.) ou insira uma frase curta (1 linha) DENTRO do próprio item para ser analisada.
-    3. RIGOR CEBRASPE: Cobre conceitos diretos, pegadinhas doutrinárias, exceções à regra ou aplicação prática direta.
+    1. FOCO TOTAL: As questões DEVEM ser estritamente sobre o "Foco Específico" ({foco_especifico}). NUNCA generalize para o tema macro do edital.
+    2. INDEPENDÊNCIA: NUNCA faça referência a "no texto" ou "o autor", crie frases autossuficientes.
+    3. RIGOR CEBRASPE: Cobre teoria, exceções à regra ou aplicação prática direta do Foco Específico.
 
     Retorne APENAS um JSON estrito no formato:
     [
@@ -174,10 +171,11 @@ def gerar_questoes_ia(materia, topico, qtd_necessaria):
             conn = conectar_banco()
             cursor = conn.cursor()
             for q in questoes_novas:
+                # Salva o micro-tópico na coluna 'topico' e o macro na coluna 'topico_edital'
                 cursor.execute("""
                     INSERT INTO questoes (materia, topico, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito, status_escopo)
                     VALUES (%s, %s, %s, %s, %s, %s, 'Tema 2 - Fiscalizacao')
-                """, (materia, topico, topico, q["item_inedito"], q["gabarito_oficial"], q["explicacao_gabarito"]))
+                """, (materia, foco_especifico, topico_oficial, q["item_inedito"], q["gabarito_oficial"], q["explicacao_gabarito"]))
             conn.commit()
             conn.close()
             break
@@ -334,58 +332,61 @@ opcao = st.sidebar.radio("Menu", [
 # ==============================================================================
 if opcao == "💬 Chat de Estudo Diário":
     st.header("💬 O que você estudou hoje?")
-    st.write("Escreva com suas palavras o conteúdo estudado. A IA vai identificar o tópico do edital e preparar 10 questões na hora.")
+    st.write("Escreva com suas palavras o conteúdo estudado. A IA vai identificar o tópico do edital e preparar 10 questões focadas na hora.")
 
     estudo_texto = st.text_input(
         "Digite aqui:", 
-        placeholder="Ex: Hoje estudei crimes contra a fauna e processo sancionador ambiental..."
+        placeholder="Ex: Hoje estudei tipos textuais..."
     )
 
     if st.button("🚀 Processar e Gerar Treino"):
         if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
-            st.error("⚠️ Você está no Modo Apenas Leitura. Mude para o Modo Visitante ou Edição para usar a IA.")
+            st.error("⚠️ Você está no Modo Apenas Leitura.")
         elif not estudo_texto.strip():
             st.warning("Por favor, digite o que você estudou antes de enviar!")
         else:
-            with st.spinner("🤖 GEMINI analisando seu relato e buscando o tópico no Edital Mestre..."):
-                materia_id, topico_id = identificar_topico_via_chat(estudo_texto)
+            with st.spinner("🤖 GEMINI analisando hierarquia e buscando o foco específico..."):
+                materia_id, topico_oficial, foco_especifico = identificar_topico_via_chat(estudo_texto)
 
-            if topico_id:
+            if topico_oficial and foco_especifico:
+                # Marca o Tópico MACRO como estudado na semana
                 if st.session_state.eh_admin:
                     conn = conectar_banco()
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (topico_id,))
+                    cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (topico_oficial,))
                     conn.commit()
                     conn.close()
                 
+                # Busca questões com o foco MICRO específico
                 conn = conectar_banco()
                 cursor = conn.cursor()
-                cursor.execute("SELECT id FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (topico_id,))
+                cursor.execute("SELECT id FROM questoes WHERE topico_edital = %s AND topico = %s AND status_escopo != 'Fora do Escopo'", (topico_oficial, foco_especifico))
                 q_existentes = cursor.fetchall()
                 
                 qtd_atual = len(q_existentes)
                 if qtd_atual < 10:
-                    with st.spinner(f"🤖 GEMINI gerando {10 - qtd_atual} questões para abrir o lote..."):
-                        gerar_questoes_ia(materia_id, topico_id, 10 - qtd_atual)
+                    with st.spinner(f"🤖 GEMINI gerando {10 - qtd_atual} questões focadas exclusivamente em '{foco_especifico}'..."):
+                        gerar_questoes_ia(materia_id, topico_oficial, foco_especifico, 10 - qtd_atual)
 
-                # 🔒 TRAVANDO O SORTEIO NA MEMÓRIA AQUI:
+                # Trava o sorteio do MICRO-TÓPICO na memória
                 cursor.execute("""
                     SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
                     FROM questoes 
-                    WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
+                    WHERE topico_edital = %s AND topico = %s AND status_escopo != 'Fora do Escopo'
                     ORDER BY RANDOM()
                     LIMIT 10
-                """, (topico_id,))
+                """, (topico_oficial, foco_especifico))
                 st.session_state["questoes_treino_atual"] = cursor.fetchall()
                 conn.close()
 
                 st.session_state["treino_atual"] = {
                     "materia": materia_id,
-                    "topico": topico_id
+                    "topico_oficial": topico_oficial,
+                    "foco_especifico": foco_especifico
                 }
-                st.success(f"🎯 Mapeado para: **{materia_id}** ➔ **{topico_id}**")
+                st.success(f"🎯 Mapeado: **{topico_oficial}** ➔ Foco: **{foco_especifico}**")
             else:
-                st.error("Não foi possível associar seu texto a um tópico do edital. Tente ser mais específico!")
+                st.error("Não foi possível associar seu texto a um tópico. Tente ser mais detalhista!")
 
     # Exibe o treino baseado EXCLUSIVAMENTE na memória salva
     if "treino_atual" in st.session_state and "questoes_treino_atual" in st.session_state:
@@ -396,30 +397,29 @@ if opcao == "💬 Chat de Estudo Diário":
         
         conn = conectar_banco()
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM questoes WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'", (info_t["topico"],))
+        cursor.execute("SELECT COUNT(*) FROM questoes WHERE topico_edital = %s AND topico = %s AND status_escopo != 'Fora do Escopo'", (info_t["topico_oficial"], info_t["foco_especifico"]))
         total_no_banco = cursor.fetchone()[0]
         
         c_tit, c_btn = st.columns([2, 1])
-        c_tit.subheader(f"📝 Treino: {info_t['topico']}")
-        c_tit.caption(f"O seu banco de dados tem **{total_no_banco}** questões sobre este assunto. O app sorteou 10 para você.")
+        c_tit.subheader(f"📝 Treino Focado: {info_t['foco_especifico']}")
+        c_tit.caption(f"Parte do edital: *{info_t['topico_oficial']}* | Questões sobre este foco: **{total_no_banco}**.")
         
         if st.session_state.eh_admin:
-            if c_btn.button("✨ Gerar +5 Questões Inéditas com IA"):
-                with st.spinner("Fabricando mais 5 questões inéditas para engordar seu banco..."):
-                    gerar_questoes_ia(info_t["materia"], info_t["topico"], 5)
+            if c_btn.button("✨ Gerar +5 Questões Focadas com IA"):
+                with st.spinner(f"Fabricando mais 5 questões estritas sobre {info_t['foco_especifico']}..."):
+                    gerar_questoes_ia(info_t["materia"], info_t["topico_oficial"], info_t["foco_especifico"], 5)
                     
-                    # Refaz o sorteio e salva na memória incluindo as novas
                     cursor.execute("""
                         SELECT id, item_inedito, gabarito_oficial, explicacao_gabarito 
                         FROM questoes 
-                        WHERE topico_edital = %s AND status_escopo != 'Fora do Escopo'
+                        WHERE topico_edital = %s AND topico = %s AND status_escopo != 'Fora do Escopo'
                         ORDER BY RANDOM()
                         LIMIT 10
-                    """, (info_t["topico"],))
+                    """, (info_t["topico_oficial"], info_t["foco_especifico"]))
                     st.session_state["questoes_treino_atual"] = cursor.fetchall()
                     conn.close()
                     
-                    st.success("Questões adicionadas! O lote atual foi re-sorteado.")
+                    st.success("Questões focadas adicionadas! O lote atual foi re-sorteado.")
                     st.rerun()
         else:
             conn.close()
@@ -433,14 +433,13 @@ if opcao == "💬 Chat de Estudo Diário":
 
         if st.button("📌 Finalizar Treino e Registrar Desempenho"):
             if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
-                st.error("⚠️ Você está no Modo Apenas Leitura. Suas respostas não foram avaliadas nem salvas.")
+                st.error("⚠️ Você está no Modo Apenas Leitura.")
             elif st.session_state.modo_atual == "🧪 Modo Visitante (Testar App)":
                 acertos = sum(1 for q_id, item, gabarito, explicacao in questoes if respostas_usuario.get(q_id) == gabarito)
                 st.balloons()
-                st.success(f"🧪 [Modo Visitante] Treino Finalizado! Você acertou **{acertos}/10** ({acertos * 10}%).")
-                st.info("💡 Suas estatísticas foram validadas apenas na memória e NÃO sujaram o banco de dados oficial.")
+                st.success(f"🧪 [Modo Visitante] Treino Finalizado! Você acertou **{acertos}/10**.")
             elif not st.session_state.eh_admin:
-                st.error("🔒 Digite a senha na barra lateral para salvar seu progresso no banco de dados.")
+                st.error("🔒 Digite a senha na barra lateral para salvar.")
             else:
                 acertos = 0
                 conn = conectar_banco()
@@ -452,20 +451,20 @@ if opcao == "💬 Chat de Estudo Diário":
                     if acertou:
                         acertos += 1
                     
-                    # Agora salva preenchendo o topico E o topico_edital juntos
+                    # Salva separando o micro e o macro perfeitamente
                     cursor.execute("""
                         INSERT INTO respostas (questao_id, materia, topico, topico_edital, acertou)
                         VALUES (%s, %s, %s, %s, %s)
-                    """, (q_id, info_t["materia"], info_t["topico"], info_t["topico"], acertou))
+                    """, (q_id, info_t["materia"], info_t["foco_especifico"], info_t["topico_oficial"], acertou))
                 
-                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico"],))
+                cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico_oficial"],))
                 conn.commit()
                 conn.close()
 
                 st.balloons()
-                st.success(f"Treino Concluído! Você acertou **{acertos}/10** ({acertos * 10}%).")
+                st.success(f"Treino Concluído! Você acertou **{acertos}/10**.")
                 st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
-                
+                       
 # ==============================================================================
 # 💻 INTERFACE 2: SIMULADO DA SEMANA (Acesso Permanente)
 # ==============================================================================
