@@ -128,14 +128,14 @@ def identificar_topico_via_chat(texto_usuario):
             topico = dados.get("topico") or dados.get("Topico") or dados.get("TOPICO")
             
             if materia and topico:
-                return materia, topico
+                return str(materia).strip(), str(topico).strip()
         except Exception as e:
             print(f"⚠️ Erro ao tentar o modelo {mod}: {e}")
             continue
 
     return None, None
 
-# # ==============================================================================
+# ==============================================================================
 # 🤖 GEMINI (IA - Geração Automática de Questões Inéditas Cebraspe)
 # ==============================================================================
 def gerar_questoes_ia(materia, topico, qtd_necessaria):
@@ -451,10 +451,12 @@ if opcao == "💬 Chat de Estudo Diário":
                     acertou = 1 if resp == gabarito else 0
                     if acertou:
                         acertos += 1
+                    
+                    # Agora salva preenchendo o topico E o topico_edital juntos
                     cursor.execute("""
-                        INSERT INTO respostas (questao_id, materia, topico, acertou)
-                        VALUES (%s, %s, %s, %s)
-                    """, (q_id, info_t["materia"], info_t["topico"], acertou))
+                        INSERT INTO respostas (questao_id, materia, topico, topico_edital, acertou)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (q_id, info_t["materia"], info_t["topico"], info_t["topico"], acertou))
                 
                 cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico"],))
                 conn.commit()
