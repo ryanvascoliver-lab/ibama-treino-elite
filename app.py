@@ -171,7 +171,7 @@ def gerar_questoes_ia(materia, topico_oficial, foco_especifico, qtd_necessaria):
             conn = conectar_banco()
             cursor = conn.cursor()
             for q in questoes_novas:
-                # Salva o micro-tópico na coluna 'topico' e o macro na coluna 'topico_edital'
+                # Salva o micro-tópico na coluna 'topico', o macro em 'topico_edital', e adiciona na fila do simulado
                 cursor.execute("""
                     INSERT INTO questoes (materia, topico, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito, status_escopo)
                     VALUES (%s, %s, %s, %s, %s, %s, 'Tema 2 - Fiscalizacao')
@@ -349,7 +349,6 @@ if opcao == "💬 Chat de Estudo Diário":
                 materia_id, topico_oficial, foco_especifico = identificar_topico_via_chat(estudo_texto)
 
             if topico_oficial and foco_especifico:
-                # Marca o Tópico MACRO como estudado na semana
                 if st.session_state.eh_admin:
                     conn = conectar_banco()
                     cursor = conn.cursor()
@@ -457,14 +456,16 @@ if opcao == "💬 Chat de Estudo Diário":
                         VALUES (%s, %s, %s, %s, %s)
                     """, (q_id, info_t["materia"], info_t["foco_especifico"], info_t["topico_oficial"], acertou))
                 
+                # Marca o Macro no edital E coloca as questões MICRO na fila do simulado!
                 cursor.execute("UPDATE editais SET estudado_na_semana = 1 WHERE topico = %s", (info_t["topico_oficial"],))
+                cursor.execute("UPDATE questoes SET na_fila_simulado = 1 WHERE topico = %s AND topico_edital = %s", (info_t["foco_especifico"], info_t["topico_oficial"]))
                 conn.commit()
                 conn.close()
 
                 st.balloons()
                 st.success(f"Treino Concluído! Você acertou **{acertos}/10**.")
                 st.info("Sua porcentagem de domínio foi atualizada no painel de desempenho!")
-                       
+                
 # ==============================================================================
 # 💻 INTERFACE 2: SIMULADO DA SEMANA (Acesso Permanente)
 # ==============================================================================
@@ -474,7 +475,8 @@ elif opcao == "📅 Simulado da Semana":
 
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute("SELECT materia, topico FROM editais WHERE estudado_na_semana = 1")
+    # Busca OS MICRO-TÓPICOS exatos que estão na fila VIP
+    cursor.execute("SELECT DISTINCT materia, topico FROM questoes WHERE na_fila_simulado = 1")
     topicos_semana = cursor.fetchall()
     conn.close()
 
@@ -493,35 +495,34 @@ elif opcao == "📅 Simulado da Semana":
                 if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
                     st.error("⚠️ Você está no Modo Apenas Leitura. Mude o perfil para fazer o simulado.")
                 else:
-                    topicos_nomes = [t[1] for t in topicos_semana]
-                    placeholders = ",".join(["%s"] * len(topicos_nomes)) 
-                    
                     conn = conectar_banco()
                     cursor = conn.cursor()
-                    cursor.execute(f"""
-                        SELECT id, materia, topico_edital, item_inedito, gabarito_oficial, explicacao_gabarito
+                    # Puxa estritamente as questões com o INGRESSO VIP (na_fila_simulado = 1)
+                    cursor.execute("""
+                        SELECT id, materia, topico, item_inedito, gabarito_oficial, explicacao_gabarito
                         FROM questoes
-                        WHERE topico_edital IN ({placeholders}) AND status_escopo != 'Fora do Escopo'
+                        WHERE na_fila_simulado = 1 AND status_escopo != 'Fora do Escopo'
                         ORDER BY RANDOM()
                         LIMIT 20
-                    """, topicos_nomes)
+                    """)
                     st.session_state["questoes_simulado_semanal"] = cursor.fetchall()
                     conn.close()
 
         with c_sim2:
             if st.button("🔄 Reiniciar Ciclo Semanal (Limpar Fila)"):
-                # TRAVA 3: BLOQUEIO DE REINÍCIO DO CICLO
                 if not st.session_state.eh_admin:
                     st.error("⚠️ Apenas o Ryan (Modo Edição) com a senha correta tem permissão para reiniciar o ciclo.")
                 else:
                     conn = conectar_banco()
                     cursor = conn.cursor()
+                    # Zera o edital e tira todas as questões da fila
                     cursor.execute("UPDATE editais SET estudado_na_semana = 0")
+                    cursor.execute("UPDATE questoes SET na_fila_simulado = 0")
                     conn.commit()
                     conn.close()
                     if "questoes_simulado_semanal" in st.session_state:
                         del st.session_state["questoes_simulado_semanal"]
-                    st.success("Ciclo Semanal reiniciado!")
+                    st.success("Ciclo Semanal reiniciado! Fila limpa.")
                     st.rerun()
 
     # EXECUÇÃO DO SIMULADO GERADO
@@ -533,16 +534,14 @@ elif opcao == "📅 Simulado da Semana":
         respostas_simulados = {}
         for idx, q in enumerate(questoes_sim, 1):
             q_id, mat, top, item, gab, expl = q
-            st.markdown(f"**Q{idx} [{mat}]:** {item}")
+            st.markdown(f"**Q{idx} [{mat} - {top}]:** {item}")
             respostas_simulados[q_id] = st.radio(f"Sua resposta Q{idx}:", ["Certo", "Errado"], key=f"sim_{q_id}", index=None)
             st.markdown("")
 
         if st.button("📌 Finalizar Simulado Semanal"):
-            # TRAVA 4: BLOQUEIO DE SALVAMENTO DO SIMULADO
             if st.session_state.modo_atual == "📊 Ryan (Apenas Leitura)":
                 st.error("⚠️ Você está no Modo Apenas Leitura. O simulado não foi contabilizado.")
             elif st.session_state.modo_atual == "🧪 Modo Visitante (Testar App)":
-                # Avalia apenas na memória RAM para o visitante
                 acertos = sum(1 for q in questoes_sim if respostas_simulados.get(q[0]) == q[4])
                 taxa = round((acertos / len(questoes_sim)) * 100, 1) if questoes_sim else 0
                 st.balloons()
@@ -550,7 +549,6 @@ elif opcao == "📅 Simulado da Semana":
             elif not st.session_state.eh_admin:
                 st.error("🔒 Digite a senha na barra lateral para salvar o simulado no banco de dados.")
             else:
-                # MODO ADMIN REAL (COM SENHA VALIDADA)
                 acertos = 0
                 conn = conectar_banco()
                 cursor = conn.cursor()
